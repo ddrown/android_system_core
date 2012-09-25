@@ -255,7 +255,7 @@ enum {
     NATIVE_WINDOW_SET_POST_TRANSFORM_CROP   = 16,   /* private */
     NATIVE_WINDOW_SET_BUFFERS_SIZE          = 17,   /* private */
 #ifdef QCOM_HARDWARE
-    NATIVE_WINDOW_SET_MIN_UNDEQUEUED_BUFFER_COUNT = 18, /* private */
+    NATIVE_WINDOW_UPDATE_BUFFERS_GEOMETRY   = 18,   /* private */
 #endif
 };
 
