@@ -72,11 +72,17 @@ static int property_triggers_enabled = 0;
 static int   bootchart_count;
 #endif
 
+#ifndef BOARD_CHARGING_CMDLINE_NAME
+#define BOARD_CHARGING_CMDLINE_NAME "androidboot.battchg_pause"
+#define BOARD_CHARGING_CMDLINE_VALUE "true"
+#endif
+
 static char console[32];
 static char bootmode[32];
 static char hardware[32];
 static unsigned revision = 0;
 static char qemu[32];
+static char battchg_pause[32];
 
 #ifdef HAVE_SELINUX
 static int selinux_enabled = 1;
@@ -103,6 +109,8 @@ static time_t process_needs_restart;
 static const char *ENV[32];
 
 static unsigned emmc_boot = 0;
+
+static unsigned charging_mode = 0;
 
 /* add_environment - add "key=value" to the current environment */
 int add_environment(const char *key, const char *val)
@@ -174,7 +182,7 @@ void service_start(struct service *svc, const char *dynamic_args)
          * state and immediately takes it out of the restarting
          * state if it was in there
          */
-    svc->flags &= (~(SVC_DISABLED|SVC_RESTARTING|SVC_RESET|SVC_RESTART));
+    svc->flags &= (~(SVC_DISABLED|SVC_RESTARTING|SVC_RESET));
     svc->time_started = 0;
 
         /* running processes require no additional work -- if
@@ -387,14 +395,15 @@ void service_start(struct service *svc, const char *dynamic_args)
         notify_service_state(svc->name, "running");
 }
 
-/* The how field should be either SVC_DISABLED, SVC_RESET, or SVC_RESTART */
+/* The how field should be either SVC_DISABLED or SVC_RESET */
 static void service_stop_or_reset(struct service *svc, int how)
 {
-    /* The service is still SVC_RUNNING until its process exits, but if it has
-     * already exited it shoudn't attempt a restart yet. */
-    svc->flags &= (~SVC_RESTARTING);
+        /* we are no longer running, nor should we
+         * attempt to restart
+         */
+    svc->flags &= (~(SVC_RUNNING|SVC_RESTARTING));
 
-    if ((how != SVC_DISABLED) && (how != SVC_RESET) && (how != SVC_RESTART)) {
+    if ((how != SVC_DISABLED) && (how != SVC_RESET)) {
         /* Hrm, an illegal flag.  Default to SVC_DISABLED */
         how = SVC_DISABLED;
     }
@@ -424,17 +433,6 @@ void service_reset(struct service *svc)
 void service_stop(struct service *svc)
 {
     service_stop_or_reset(svc, SVC_DISABLED);
-}
-
-void service_restart(struct service *svc)
-{
-    if (svc->flags & SVC_RUNNING) {
-        /* Stop, wait, then start the service. */
-        service_stop_or_reset(svc, SVC_RESTART);
-    } else if (!(svc->flags & SVC_RESTARTING)) {
-        /* Just start the service since it's not running. */
-        service_start(svc, NULL);
-    } /* else: Service is restarting anyways. */
 }
 
 void property_changed(const char *name, const char *value)
@@ -503,17 +501,6 @@ static void msg_stop(const char *name)
     }
 }
 
-static void msg_restart(const char *name)
-{
-    struct service *svc = service_find_by_name(name);
-
-    if (svc) {
-        service_restart(svc);
-    } else {
-        ERROR("no such service '%s'\n", name);
-    }
-}
-
 void handle_control_message(const char *msg, const char *arg)
 {
     if (!strcmp(msg,"start")) {
@@ -521,7 +508,8 @@ void handle_control_message(const char *msg, const char *arg)
     } else if (!strcmp(msg,"stop")) {
         msg_stop(arg);
     } else if (!strcmp(msg,"restart")) {
-        msg_restart(arg);
+        msg_stop(arg);
+        msg_start(arg);
     } else {
         ERROR("unknown control msg '%s'\n", msg);
     }
@@ -667,6 +655,8 @@ static void import_kernel_nv(char *name, int for_emulator)
             emmc_boot = 1;
         }
 #endif
+    } else if (!strcmp(name,BOARD_CHARGING_CMDLINE_NAME)) {
+        strlcpy(battchg_pause, value, sizeof(battchg_pause));
     } else if (!strncmp(name, "androidboot.", 12) && name_len > 12) {
         const char *boot_prop_name = name + 12;
         char prop[PROP_NAME_MAX];
@@ -1011,6 +1001,11 @@ int main(int argc, char **argv)
     queue_builtin_action(property_service_init_action, "property_service_init");
     queue_builtin_action(signal_init_action, "signal_init");
     queue_builtin_action(check_startup_action, "check_startup");
+
+    /* Older bootloaders use non-standard charging modes. Check for
+     * those now, after mounting the filesystems */
+    if (strcmp(battchg_pause, BOARD_CHARGING_CMDLINE_VALUE) == 0)
+        is_charger = 1;
 
     if (is_charger) {
         action_for_each_trigger("charger", action_add_queue_tail);
